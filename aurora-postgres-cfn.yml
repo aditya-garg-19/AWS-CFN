@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation Template to create Aurora Postgresql Cluster DB Instance'
+
+###############################################################################
+# Parameters 
+###############################################################################   
+
+Parameters:
+
+  ParentVPCStack:
+    Description: 'Provide Stack name of parent VPC stack based on VPC-3AZs yaml template. Refer Cloudformation dashboard in AWS Console to get this.'
+    Type: String
+    MinLength: '1'
+    MaxLength: '128'
+    AllowedPattern: '^[a-zA-Z]+[0-9a-zA-Z\-]*$'
+    
+  
+    
+  DBName:
+    Description: Database Name
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: "^[a-zA-Z]+[0-9a-zA-Z_]*$" 
+    ConstraintDescription: Must start with a letter. Only numbers, letters, and _ accepted. max length 64 characters 
+
+  DBPort:
+    Description: TCP/IP Port for the Database Instance
+    Type: Number
+    Default: 5432
+    ConstraintDescription: 'Must be in the range [1115-65535]'
+    MinValue: 1115
+    MaxValue: 65535
+    
+  DBUsername:
+    Description: Database master username
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: "^[a-zA-Z]+[0-9a-zA-Z_]*$"
+    ConstraintDescription: Must start with a letter. Only numbers, letters, and _ accepted. max length 16 characters
+     
+  DBEngineVersion:
+    Description: Select Database Engine Version
+    Type: String
+    Default: 9.6.8
+    AllowedValues:
+      - 9.6.8
+      - 9.6.9
+      - 9.6.11
+      - 9.6.12
+      - 9.6.16
+      - 10.4
+      - 10.5
+      - 10.6
+      - 10.7
+      - 10.11
+      - 11.4
+      - 11.6
+     
+  DBInstanceClass:
+    Default: db.r4.large
+    Description: Database Instance Class. db.r5 instance classes are supported for Aurora PostgreSQL 10.6 or later. db.t3.medium instance class is supported for Aurora PostgreSQL 10.7 or later.
+    Type: String
+    AllowedValues:
+    - db.t3.medium
+    - db.r4.large
+    - db.r4.xlarge
+    - db.r4.2xlarge
+    - db.r4.4xlarge
+    - db.r4.8xlarge
+    - db.r4.16xlarge
+    - db.r5.large
+    - db.r5.xlarge
+    - db.r5.2xlarge
+    - db.r5.4xlarge
+    - db.r5.8xlarge
+    - db.r5.12xlarge
+    - db.r5.16xlarge
+    - db.r5.24xlarge
+  
+  EnvironmentStage:
+    Type: String
+    Description: The environment tag is used to designate the Environment Stage of the associated AWS resource.
+    AllowedValues:
+      - dev
+      - test
+      - pre-prod
+      - prod
+    Default: dev
+ 
+Mappings: 
+  DBFamilyMap: 
+    "9.6.8": 
+      "family": "aurora-postgresql9.6"
+    "9.6.9": 
+      "family": "aurora-postgresql9.6"
+    "9.6.11": 
+      "family": "aurora-postgresql9.6"
+    "9.6.12": 
+      "family": "aurora-postgresql9.6"
+    "9.6.16": 
+      "family": "aurora-postgresql9.6"
+    "10.4":
+      "family": "aurora-postgresql10"
+    "10.5":
+      "family": "aurora-postgresql10"
+    "10.6":
+      "family": "aurora-postgresql10"
+    "10.7":
+      "family": "aurora-postgresql10"
+    "10.11":
+      "family": "aurora-postgresql10"
+    "11.4":
+      "family": "aurora-postgresql11"
+    "11.6":
+      "family": "aurora-postgresql11"
+
+
+###############################################################################
+# Conditions
+############################################################################### 
+Conditions:
+  IsProd: !Equals [!Ref EnvironmentStage, 'prod']
+  IsReplica: !Or [!Equals [!Ref EnvironmentStage, 'pre-prod'], Condition: IsProd]
+
+Resources:
+ 
+ DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Ref 'AWS::StackName'
+      SubnetIds: 
+        -	subnet-5605fe0b
+        - subnet-38b0ba73
+ 
+ RDSDBClusterParameterGroup:
+  Type: AWS::RDS::DBClusterParameterGroup
+  Properties:
+    Description: !Join [ "- ", [ "Aurora PG Cluster Parameter Group for  Cloudformation Stack ", !Ref DBName ] ]
+    Family: !FindInMap [DBFamilyMap, !Ref DBEngineVersion, "family"] 
+    Parameters:
+      rds.force_ssl: 1
+
+ DBParamGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Join [ "- ", [ "Aurora PG Database Instance Parameter Group for Cloudformation Stack ", !Ref DBName ] ]
+      Family: !FindInMap [DBFamilyMap, !Ref DBEngineVersion, "family"] 
+      Parameters:
+        log_statement: "ddl"
+        log_connections: 1
+        log_disconnections: 1
+        log_lock_waits: 1
+        log_min_duration_statement: 5000
+        auto_explain.log_min_duration: 5000
+        auto_explain.log_verbose: 1
+        log_rotation_age: 1440
+        log_rotation_size: 102400
+        rds.log_retention_period: 10080
+        random_page_cost: 1
+        track_activity_query_size: 16384
+        idle_in_transaction_session_timeout: 7200000
+        statement_timeout: 7200000
+        search_path: '"$user",public'
+
+ AuroraMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Join ['/', [!Ref EnvironmentStage, 'aurora-pg', !Ref 'AWS::StackName']]
+      Description: !Join ['', ['Aurora PostgreSQL Master User Secret ', 'for CloudFormation Stack ', !Ref 'AWS::StackName']]
+      Tags:
+        -
+          Key: EnvironmentStage
+          Value: !Ref EnvironmentStage
+        -
+          Key: DatabaseEngine
+          Value: 'Aurora PostgreSQL'
+        -
+          Key: StackID
+          Value: !Ref 'AWS::StackId'
+      GenerateSecretString:
+        SecretStringTemplate: !Join ['', ['{"username": "', !Ref DBUsername, '"}']]
+        GenerateStringKey: "password"
+        ExcludeCharacters: '"@/\'
+        PasswordLength: 16
+
+ SecretAuroraClusterAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref AuroraMasterSecret
+      TargetId: !Ref AuroraDBCluster
+      TargetType: AWS::RDS::DBCluster
+
+ AuroraDBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: !Ref DBEngineVersion
+      DatabaseName:  !Ref DBName
+      Port: !Ref DBPort
+      MasterUsername:
+         !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraMasterSecret, ':SecretString:username}}' ]]
+      MasterUserPassword:
+         !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraMasterSecret, ':SecretString:password}}' ]]
+      DBSubnetGroupName: !Ref DBSubnetGroup        
+      BackupRetentionPeriod: !If [IsProd, 35, 7]
+      DBClusterParameterGroupName: !Ref RDSDBClusterParameterGroup
+      StorageEncrypted:  true
+
+ AuroraDBFirstInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass:
+        Ref: DBInstanceClass
+      DBClusterIdentifier: !Ref AuroraDBCluster  
+      Engine: aurora-postgresql
+      EngineVersion: !Ref DBEngineVersion
+      DBParameterGroupName:
+        Ref: DBParamGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: !If [IsProd, 731, 7]
+      
+ AuroraDBSecondInstance:
+    Condition: IsReplica
+    Type: AWS::RDS::DBInstance
+    DependsOn: 
+      - AuroraDBFirstInstance
+    Properties:
+      DBInstanceClass:
+        Ref: DBInstanceClass
+      DBClusterIdentifier: !Ref AuroraDBCluster  
+      Engine: aurora-postgresql
+      EngineVersion: !Ref DBEngineVersion
+      DBParameterGroupName:
+        Ref: DBParamGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      Tags:
+        -
+          Key: EnvironmentStage
+          Value: !Ref EnvironmentStage
+        -
+          Key: Application
+          Value: "second"
+        
+###############################################################################
+# Outputs 
+###############################################################################   
+Outputs:
+  ClusterEndpoint:
+    Description: 'Aurora Cluster/Writer Endpoint'
+    Value: !GetAtt 'AuroraDBCluster.Endpoint.Address'
+  ReaderEndpoint:
+    Description: 'Aurora Reader Endpoint'
+    Value: !GetAtt 'AuroraDBCluster.ReadEndpoint.Address'
+  Port:
+    Description: 'Aurora Endpoint Port'
+    Value: !GetAtt 'AuroraDBCluster.Endpoint.Port'
+  DBUsername:
+    Description: 'Database master username'
+    Value: !Ref DBUsername
+  DBName:
+    Description: 'Database Name'
+    Value: !Ref DBName
+  PSQLCommandLine:    
+    Description: PSQL Command Line
+    Value: !Join
+             - ''
+             - - 'psql --host='
+               - !GetAtt 'AuroraDBCluster.Endpoint.Address' 
+               - ' --port='
+               - !GetAtt 'AuroraDBCluster.Endpoint.Port'
+               - ' --username='
+               - !Ref DBUsername
+               - ' --dbname='
+               - !Ref DBName
+    
